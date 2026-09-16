@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-15",
+  "side": "BUY",
+  "box_low": 56231.85,
+  "box_high": 57575.15,
+
+  "breakout_buffer": 10,
+  "violent_range": 180,
+  "candle_minutes": 5,
+  "first_bar_eligible_as_c1": true,
+
+  "no_new_entry_after": "14:45",
+  "squareoff_alert_at": "15:10",
+
+  "index_symbol": "NSE:NIFTY BANK",
+  "fut_name": "BANKNIFTY",
+
+  "email": {
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "user": "yashkashyap393@gmail.com",
+    "password_env": "ZERODHA_SMTP_PASSWORD",
+    "from": "yashkashyap393@gmail.com",
+    "to": ["yashkashyap393@gmail.com"]
+  }
+}
+

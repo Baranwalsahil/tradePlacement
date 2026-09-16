@@ -8,11 +8,15 @@ endpoint and emails you at each decision point; you place every trade yourself.
 
 | File | Purpose |
 |---|---|
-| `login.py` | Mint today's Kite access token, cache it at `.kite_token.json` (0600) |
+| `webui.py` | Control panel: arm the day, one-click Kite login, stop button, 09:00 scheduler |
+| `scheduler.py` | The arming / token / launch rules, kept testable without a browser |
+| `login.py` | Terminal fallback for minting the token, if you would rather not use the UI |
 | `strategy.py` | The alerter. Polls historical candles, runs the state machine, emails |
 | `config.json` | Your box, side and date for today (copy from `config.example.json`) |
 | `simtest.py` | Offline replay of 16 scenarios against the state machine, no network |
 | `aggtest.py` | Offline checks on candle sourcing and VWAP accumulation, no network |
+| `uitest.py` | Offline checks on arming, token and launch rules, no network |
+| `state.json` | What is armed, stopped, and running. Written by the UI |
 | `DECISIONS.md` | Every spec question asked, the answer given, and what it became in code |
 | `RUNBOOK.md` | Step-by-step for running it against the live market, plus troubleshooting |
 
@@ -39,11 +43,43 @@ in `config.json`.
 
 ## Daily routine
 
+Start the control panel once and leave it running:
+
 ```bash
-python login.py          # ~09:00, paste the request_token once
-$EDITOR config.json      # set date, side, box_low, box_high
-python strategy.py       # any time - it backfills the session from 09:15
+./venv/bin/python webui.py        # http://127.0.0.1:5000
 ```
+
+Then:
+
+| When | Do |
+|---|---|
+| Evening, before 22:00 | Fill the form — date, side, box_low, box_high, violent_range — and **Submit & arm**. This writes `config.json` and arms that date. |
+| Morning, after 07:35 | Click **Log in to Kite**. Kite flushes every access token between 07:30 and 08:30, so last night's login is always dead by morning — this step cannot be done in advance. |
+| 09:00 | The scheduler launches `strategy.py` by itself, but only if the day is armed *and* a token valid for today exists. |
+| Any time | **Stop** disarms the day, kills a running strategy, and emails a record. |
+
+If you have not logged in by 09:00 the scheduler keeps waiting and starts the
+moment you do — the strategy backfills from 09:15, so a late start still
+reconstructs the whole session. It gives up at `wait_for_token_until` (14:45).
+
+**One-off setup:** in the Kite developer console set the app's Redirect URL to
+exactly `http://127.0.0.1:5000/callback`, so the panel can catch the
+`request_token` itself. If you would rather not change it, the panel has a
+"paste a request_token manually" box that works with the current
+`https://localhost` setting.
+
+Timings live in `config.json` under `ui`:
+
+```json
+"ui": {
+  "port": 5000,
+  "arm_cutoff": "22:00",
+  "launch_at": "09:00",
+  "wait_for_token_until": "14:45"
+}
+```
+
+Running `strategy.py` by hand still works and ignores all of the above.
 
 `strategy.py` refuses to run if `config.json` is dated anything but today, so a
 stale box can't quietly trade yesterday's levels. `--ignore-date` overrides.
@@ -137,6 +173,7 @@ Consequences:
 ```bash
 python simtest.py     # strategy state machine
 python aggtest.py     # candle sourcing and VWAP
+python uitest.py      # arming, token and launch rules
 ```
 
 `simtest.py` stubs out `kiteconnect` and replays 16 synthetic days: violent

@@ -392,6 +392,17 @@ def status():
                     "would_launch": go, "reason": reason})
 
 
+@app.get("/healthz")
+def healthz():
+    """Cheap liveness probe. No Kite calls, no disk writes, no side effects.
+
+    Safe to hit every few minutes from an uptime pinger to stop a free-tier
+    host from spinning the instance down.
+    """
+    return jsonify({"ok": True, "now": S.now().isoformat(),
+                    "pid_running": S.running_pid() is not None}), 200
+
+
 # --------------------------------------------------------------------------- #
 # scheduler thread
 # --------------------------------------------------------------------------- #
@@ -414,6 +425,29 @@ def scheduler_loop(interval: int = 20) -> None:
         time.sleep(interval)
 
 
+def self_ping_loop(url: str, interval: int = 600) -> None:
+    """Hit our own public /healthz so the host sees inbound traffic.
+
+    Only useful on hosts that sleep an idle instance. It cannot wake a process
+    that is already asleep - pair it with an external pinger for that.
+    """
+    import urllib.error
+    import urllib.request
+
+    last_err = None
+    while True:
+        time.sleep(interval)
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                r.read(64)
+            last_err = None
+        except Exception as exc:  # noqa: BLE001
+            msg = f"self-ping failed: {exc}"
+            if msg != last_err:
+                note(msg)
+                last_err = msg
+
+
 def main() -> int:
     cfg = S.load_config()
     port = int(cfg["ui"]["port"])
@@ -421,9 +455,23 @@ def main() -> int:
         if not os.environ.get(var):
             print(f"warning: {var} is not set - login will fail", file=sys.stderr)
     threading.Thread(target=scheduler_loop, daemon=True).start()
-    note(f"control panel on http://127.0.0.1:{port}")
+
+    # PORT/HOST are set by PaaS hosts (Render, Fly, Heroku). Locally we keep
+    # binding to loopback only - this panel can mint Kite tokens and arm live
+    # alerts, so it must not be reachable from the network by accident.
+    port = int(os.environ.get("PORT") or port)
+    host = os.environ.get("HOST", "127.0.0.1")
+
+    keepalive = os.environ.get("KEEPALIVE_URL")
+    if keepalive:
+        every = int(os.environ.get("KEEPALIVE_INTERVAL", "600"))
+        threading.Thread(target=self_ping_loop, args=(keepalive, every),
+                         daemon=True).start()
+        note(f"self-ping every {every}s -> {keepalive}")
+
+    note(f"control panel on http://{host}:{port}")
     note(f"Kite Redirect URL must be exactly {callback_url()}")
-    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
+    app.run(host=host, port=port, debug=False, use_reloader=False)
     return 0
 
 

@@ -46,8 +46,11 @@ def extract_request_token(pasted: str) -> str:
 
 
 def main() -> int:
-    api_key = os.environ.get("KITE_API_KEY")
-    api_secret = os.environ.get("KITE_API_SECRET")
+    # .strip(): a secret pasted with a trailing newline produces a bad checksum,
+    # which Kite reports as "Token is invalid or has expired" - a misleading
+    # message that sends you hunting for a stale token instead.
+    api_key = (os.environ.get("KITE_API_KEY") or "").strip()
+    api_secret = (os.environ.get("KITE_API_SECRET") or "").strip()
     if not api_key or not api_secret:
         print("Set KITE_API_KEY and KITE_API_SECRET in the environment.", file=sys.stderr)
         return 1
@@ -69,8 +72,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - surface whatever Kite says
         print(f"Token exchange failed: {exc}", file=sys.stderr)
         print(
-            "\nrequest_tokens are single-use and expire within a few minutes. "
-            "Open the login URL again and use a fresh one.",
+            "\nOne of these: the request_token was already used (one exchange "
+            "per login), it is more than a few minutes old, or KITE_API_SECRET "
+            f"does not match app ...{api_key[-4:]} in the Kite developer "
+            "console. Open the login URL again and use a fresh token.",
             file=sys.stderr,
         )
         return 1

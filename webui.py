@@ -67,6 +67,14 @@ app.wsgi_app = KeepAlive(app.wsgi_app)
 _events: list = []          # recent activity, newest last
 _lock = threading.Lock()
 
+_login_api_key: Optional[str] = None   # api_key that built the last login URL
+_spent_tokens: list = []               # request_tokens already sent to Kite
+
+
+def _spend(request_token: str) -> None:
+    _spent_tokens.append(request_token)
+    del _spent_tokens[:-20]
+
 
 def note(msg: str) -> None:
     with _lock:
@@ -329,10 +337,12 @@ def stop():
 @app.get("/login")
 def login():
     from kiteconnect import KiteConnect
-    api_key = os.environ.get("KITE_API_KEY")
+    global _login_api_key
+    api_key = (os.environ.get("KITE_API_KEY") or "").strip()
     if not api_key:
         return render(errors=["KITE_API_KEY is not set in this shell."])
-    note("opening Kite login")
+    _login_api_key = api_key
+    note(f"opening Kite login with api_key ...{api_key[-4:]}")
     return redirect(KiteConnect(api_key=api_key).login_url())
 
 
@@ -359,21 +369,50 @@ def manual_token():
 
 
 def exchange(request_token: str) -> tuple[bool, str]:
-    """request_token -> access_token, cached for strategy.py."""
+    """request_token -> access_token, cached for strategy.py.
+
+    Kite answers a bad checksum with the same "Token is invalid or has expired"
+    it uses for a stale token, so a wrong or whitespace-padded api_secret looks
+    exactly like a slow login. Strip the env values and say which causes are
+    still on the table rather than blaming the token.
+    """
     import json
     import stat
 
     from kiteconnect import KiteConnect
-    api_key = os.environ.get("KITE_API_KEY")
-    api_secret = os.environ.get("KITE_API_SECRET")
+    from kiteconnect.exceptions import TokenException
+
+    api_key = (os.environ.get("KITE_API_KEY") or "").strip()
+    api_secret = (os.environ.get("KITE_API_SECRET") or "").strip()
     if not api_key or not api_secret:
         return False, "KITE_API_KEY / KITE_API_SECRET are not set in this shell."
+    if request_token in _spent_tokens:
+        return False, ("That request_token has already been exchanged once. "
+                       "They are single-use - click Log in to Kite for a fresh "
+                       "one instead of reloading this page.")
+
     kite = KiteConnect(api_key=api_key)
     try:
         sess = kite.generate_session(request_token, api_secret=api_secret)
-    except Exception as exc:  # noqa: BLE001
-        return False, (f"Token exchange failed: {exc}. request_tokens are "
-                       "single-use and expire in minutes - log in again.")
+    except TokenException as exc:
+        _spend(request_token)   # Kite saw it, so it is burnt either way
+        causes = ["it was already used - one exchange per login",
+                  "it is more than a few minutes old",
+                  f"KITE_API_SECRET in this process does not match the secret "
+                  f"of app ...{api_key[-4:]} in the Kite developer console"]
+        if _login_api_key and _login_api_key != api_key:
+            causes.append(f"the login URL was built with api_key "
+                          f"...{_login_api_key[-4:]} but this process exchanges "
+                          f"with ...{api_key[-4:]}")
+        note(f"token exchange failed (api_key ...{api_key[-4:]}): {exc}")
+        return False, (f"Token exchange failed: {exc}. One of these: "
+                       + "; ".join(causes) + ".")
+    except Exception as exc:  # noqa: BLE001 - network, DNS, Kite outage
+        note(f"token exchange error (api_key ...{api_key[-4:]}): {exc}")
+        return False, (f"Could not reach Kite to exchange the token: {exc}. "
+                       "The token may still be good - retry within a minute or "
+                       "two, otherwise log in again.")
+    _spend(request_token)
     S.TOKEN.write_text(json.dumps({
         "access_token": sess["access_token"], "api_key": api_key,
         "date": S.now().date().isoformat(), "user_id": sess.get("user_id"),

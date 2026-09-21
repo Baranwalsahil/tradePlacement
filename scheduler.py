@@ -15,6 +15,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -26,7 +27,24 @@ CONFIG = HERE / "config.json"
 STATE = HERE / "state.json"
 TOKEN = HERE / ".kite_token.json"
 LOGS = HERE / "logs"
-PYTHON = HERE / "venv" / "bin" / "python"
+def _python() -> str:
+    """Interpreter used to launch strategy.py.
+
+    Locally that is the repo venv. On a host like Render the code is deployed
+    without one and the dependencies live in the interpreter already running
+    this process, so fall back to sys.executable rather than a path that does
+    not exist. STRATEGY_PYTHON overrides both.
+    """
+    override = (os.environ.get("STRATEGY_PYTHON") or "").strip()
+    if override:
+        return override
+    venv_python = HERE / "venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+PYTHON = _python()
 
 DEFAULT_UI = {
     "port": 5000,
@@ -206,7 +224,7 @@ def launch(cfg: dict) -> dict:
     logfile = LOGS / f"{today}.log"
     fh = open(logfile, "a")
     proc = subprocess.Popen(
-        [str(PYTHON), str(HERE / "strategy.py")],
+        [PYTHON, str(HERE / "strategy.py")],
         cwd=str(HERE), stdout=fh, stderr=subprocess.STDOUT,
         start_new_session=True,
     )

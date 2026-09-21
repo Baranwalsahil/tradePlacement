@@ -28,7 +28,7 @@ import time
 import traceback
 from datetime import datetime
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from flask import Flask, jsonify, redirect, render_template_string, request
 
@@ -241,7 +241,7 @@ PAGE = """<!doctype html>
   <pre>{{ events }}</pre>
 </div>
 </div>
-<script>setTimeout(() => location.reload(), 20000);</script>
+{% if autoreload %}<script>setTimeout(() => location.reload(), 20000);</script>{% endif %}
 """
 
 
@@ -274,7 +274,21 @@ def render(message: str = "", errors: Optional[list] = None,
         form={**defaults, **(form or {})},
         errors=errors or [], message=message,
         callback_url=callback_url(), events=events,
+        # Reloading a page whose request was a POST resubmits that POST. The
+        # timed reload below re-armed the day every 20 seconds because of it,
+        # so only a GET gets the script.
+        autoreload=request.method == "GET",
     )
+
+
+def home(message: str = "", errors: Optional[list] = None):
+    """Post/Redirect/Get: land on a plain GET of / carrying the outcome.
+
+    Keeps the 20s auto-reload harmless - it re-runs a GET, never the action.
+    """
+    params = [("msg", message)] if message else []
+    params += [("err", e) for e in errors or []]
+    return redirect("/?" + urlencode(params) if params else "/")
 
 
 def callback_url() -> str:
@@ -289,7 +303,8 @@ def callback_url() -> str:
 
 @app.get("/")
 def index():
-    return render()
+    return render(message=request.args.get("msg", ""),
+                  errors=request.args.getlist("err"))
 
 
 @app.post("/arm")
@@ -305,8 +320,8 @@ def arm():
     note(f"armed {clean['date']} {clean['side']} "
          f"box {clean['box_low']}-{clean['box_high']} "
          f"violent>{clean['violent_range']}")
-    return render(message=f"Armed for {clean['date']}. "
-                          f"Log in to Kite after 07:35 that morning.")
+    return home(f"Armed for {clean['date']}. "
+                f"Log in to Kite after 07:35 that morning.")
 
 
 @app.post("/stop")
@@ -328,10 +343,9 @@ def stop():
            if killed else "No strategy process was running.\n"))
     msg = f"Stopped {target}." + (f" Killed pid {killed}." if killed else "")
     if mail_err:
-        return render(message=msg,
-                      errors=[f"The stop took effect, but the confirmation "
-                              f"email could not be sent - {mail_err}"])
-    return render(message=msg + " Confirmation emailed.")
+        return home(msg, [f"The stop took effect, but the confirmation "
+                          f"email could not be sent - {mail_err}"])
+    return home(msg + " Confirmation emailed.")
 
 
 @app.get("/login")
@@ -350,10 +364,10 @@ def login():
 def callback():
     rt = request.args.get("request_token")
     if not rt:
-        return render(errors=[f"Kite redirected here without a request_token "
-                              f"({dict(request.args)})."])
+        return home(errors=[f"Kite redirected here without a request_token "
+                            f"({dict(request.args)})."])
     ok, msg = exchange(rt)
-    return render(message=msg) if ok else render(errors=[msg])
+    return home(msg) if ok else home(errors=[msg])
 
 
 @app.post("/manual-token")
@@ -365,7 +379,7 @@ def manual_token():
     if not raw:
         return render(errors=["Nothing pasted."])
     ok, msg = exchange(raw)
-    return render(message=msg) if ok else render(errors=[msg])
+    return home(msg) if ok else home(errors=[msg])
 
 
 def exchange(request_token: str) -> tuple[bool, str]:

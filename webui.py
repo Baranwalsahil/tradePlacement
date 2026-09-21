@@ -22,6 +22,7 @@ alerts go out, so it must not be exposed to the network.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -30,7 +31,8 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from flask import Flask, jsonify, redirect, render_template_string, request
+from flask import (Flask, Response, jsonify, redirect,
+                   render_template_string, request)
 
 import scheduler as S
 from strategy import Emailer
@@ -240,6 +242,12 @@ PAGE = """<!doctype html>
 <div class="card">
   <pre>{{ events }}</pre>
 </div>
+
+<div class="card">
+  <b>Strategy log</b> <span class="muted">{{ log_name }}</span>
+  &middot; <a href="/log">full</a>
+  <pre>{{ strategy_log }}</pre>
+</div>
 </div>
 {% if autoreload %}<script>setTimeout(() => location.reload(), 20000);</script>{% endif %}
 """
@@ -261,6 +269,8 @@ def render(message: str = "", errors: Optional[list] = None,
     }
     with _lock:
         events = "\n".join(_events[-18:]) or "(nothing yet)"
+    log_name = f"{today.isoformat()}.log"
+    strategy_log = tail_log(today.isoformat(), 20)
     return render_template_string(
         PAGE,
         cfg=cfg, st=st, tok=S.token_status(), pid=S.running_pid(),
@@ -274,6 +284,7 @@ def render(message: str = "", errors: Optional[list] = None,
         form={**defaults, **(form or {})},
         errors=errors or [], message=message,
         callback_url=callback_url(), events=events,
+        log_name=log_name, strategy_log=strategy_log,
         # Reloading a page whose request was a POST resubmits that POST. The
         # timed reload below re-armed the day every 20 seconds because of it,
         # so only a GET gets the script.
@@ -289,6 +300,31 @@ def home(message: str = "", errors: Optional[list] = None):
     params = [("msg", message)] if message else []
     params += [("err", e) for e in errors or []]
     return redirect("/?" + urlencode(params) if params else "/")
+
+
+def tail_log(day: str, lines: int) -> str:
+    """Last `lines` of logs/<day>.log.
+
+    strategy.py runs as a subprocess with stdout and stderr redirected into that
+    file, so its output reaches neither this panel's event list nor the host's
+    log stream. Reading the file is the only way to see a trade from a browser.
+    """
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        return "(bad date)"
+    path = S.LOGS / f"{day}.log"
+    try:
+        text = path.read_text(errors="replace")
+    except FileNotFoundError:
+        return f"(no log for {day} yet - strategy.py has not written anything)"
+    except OSError as exc:
+        return f"(cannot read {path.name}: {exc})"
+    return "\n".join(text.splitlines()[-lines:]) or "(log is empty)"
+
+
+@app.get("/log")
+def log_tail():
+    day = request.args.get("date") or S.now().date().isoformat()
+    return Response(tail_log(day, 500) + "\n", mimetype="text/plain")
 
 
 def callback_url() -> str:

@@ -16,11 +16,11 @@
     "api_key_env": "ZERODHA_SENDGRID_KEY",
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
-    "user": "sahilbaranwaliiest@gmail.com",
+    "user": "yashkashyap393@gmail.com",
     "password_env": "ZERODHA_SMTP_PASSWORD",
-    "from": "sahilsuman000@gmail.com",
+    "from": "yashkashyap393@gmail.com",
     "to": [
-      "sahilsuman000@gmail.com"
+      "yashkashyap393@gmail.com"
     ]
   },
   "ui": {

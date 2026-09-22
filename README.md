@@ -23,7 +23,7 @@ endpoint and emails you at each decision point; you place every trade yourself.
 ## Setup
 
 First time out, follow [`RUNBOOK.md`](RUNBOOK.md) — it covers the Kite
-subscription, the app password, how to verify the data path in the first ten
+subscription, the mail credentials, how to verify the data path in the first ten
 minutes, and how to force a test signal without waiting days for a real setup.
 The short version:
 
@@ -32,14 +32,20 @@ pip install -r requirements.txt
 
 export KITE_API_KEY=your_api_key
 export KITE_API_SECRET=your_api_secret
-export ZERODHA_SMTP_PASSWORD=your_google_app_password
+export ZERODHA_SENDGRID_KEY=your_sendgrid_api_key
 
 cp config.example.json config.json
 ```
 
-The SMTP password must be a **Google app password**, not your account password —
-Workspace rejects plain passwords over SMTP. Keep it in the environment, never
-in `config.json`.
+Alerts go out over the SendGrid HTTPS API (`"transport": "http"` in the email
+config). Render blocks outbound SMTP on free instances, so port 443 is the only
+route mail can take from there. The sender address must be verified in SendGrid
+under Sender Authentication or every send comes back 403.
+
+To use Gmail SMTP instead — fine locally, dead on Render free — set
+`"transport": "smtp"` and export `ZERODHA_SMTP_PASSWORD` instead. That must be a
+**Google app password**, not your account password. Either way the credential
+lives in the environment, never in `config.json`.
 
 ## Daily routine
 
@@ -84,7 +90,7 @@ Running `strategy.py` by hand still works and ignores all of the above.
 `strategy.py` refuses to run if `config.json` is dated anything but today, so a
 stale box can't quietly trade yesterday's levels. `--ignore-date` overrides.
 
-Other flags: `--no-email` (console only), `--test-email` (verify SMTP and exit),
+Other flags: `--no-email` (console only), `--test-email` (send one mail and exit),
 `--replay YYYY-MM-DD` (run a past session from history and exit), `--no-backfill`,
 `--config PATH`.
 

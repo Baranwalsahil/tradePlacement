@@ -16,6 +16,8 @@
   "fut_name": "BANKNIFTY",
 
   "email": {
+    "transport": "http",
+    "api_key_env": "ZERODHA_SENDGRID_KEY",
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
     "user": "yashkashyap393@gmail.com",

@@ -345,13 +345,28 @@ armed/disarmed early warnings.
 **A: Email.**
 
 **Q: Transport?**
-**A: Gmail / Workspace SMTP.** `smtp.gmail.com:587` STARTTLS with a **Google app
-password** (Workspace rejects account passwords over SMTP). Password read from
-the `ZERODHA_SMTP_PASSWORD` env var — never from `config.json`, never in code.
+**A: Both, chosen by config.** `"transport": "smtp"` is Gmail / Workspace SMTP —
+`smtp.gmail.com:587` STARTTLS with a **Google app password** (Workspace rejects
+account passwords over SMTP), read from `ZERODHA_SMTP_PASSWORD`.
 
-A failing mail server logs an error and is swallowed; it never kills the run.
+**Q: Why a second transport?**
+**A: Render blocks outbound SMTP.** Port 25 is blocked on every Render instance
+type, and since 26 September 2025 ports 465 and 587 are blocked on free web
+services too, so no SMTP client can reach a mail server from there. Paying for
+an instance would unblock 465/587, but an HTTPS email API costs nothing and
+removes the dependency on the host's egress rules entirely.
 
-→ `Emailer`.
+`"transport": "http"` therefore POSTs to the SendGrid v3 API over port 443,
+which no PaaS blocks — the same port the Kite API already uses, so it is proven
+to work from the deployed container. Key read from `ZERODHA_SENDGRID_KEY`. Both
+credentials come from the environment — never from `config.json`, never in code.
+
+SendGrid over its own SMTP relay on port 2525 would also slip past the block,
+but the HTTPS API needs no long-lived socket and gives a status code per send.
+
+Either transport failing logs an error and is swallowed; it never kills the run.
+
+→ `Emailer`, `Emailer._send_http`, `Emailer._send_smtp`.
 
 ---
 

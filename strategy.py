@@ -45,14 +45,18 @@ print and intra-second extremes, which put the open out by 32 pts and a high by
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import os
 import queue
 import smtplib
+import socket
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime, timedelta
 from email.message import EmailMessage
@@ -151,14 +155,39 @@ class SessionVWAP:
 # --------------------------------------------------------------------------- #
 
 
+SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
+
+
 class Emailer:
+    """Alert mail over SMTP, or over the SendGrid HTTPS API.
+
+    Render blocks outbound port 25 on every instance type and also 465/587 on
+    the free ones, so SMTP cannot leave the container there at all. Setting
+    "transport": "http" in the email config sends over port 443 instead, which
+    no PaaS blocks.
+    """
+
     def __init__(self, cfg: dict, enabled: bool = True) -> None:
+        self.transport = cfg.get("transport", "smtp")
+        self.to = cfg["to"] if isinstance(cfg["to"], list) else [cfg["to"]]
+        self.enabled = enabled
+
+        if self.transport == "http":
+            self.sender = cfg["from"]
+            self.api_url = cfg.get("api_url", SENDGRID_URL)
+            env_name = cfg.get("api_key_env", "ZERODHA_SENDGRID_KEY")
+            self.api_key = os.environ.get(env_name)
+            if enabled and not self.api_key:
+                raise SystemExit(
+                    f"SendGrid API key not found. Set {env_name} in the "
+                    "environment (the key is shown once, at creation time)."
+                )
+            return
+
         self.host = cfg["smtp_host"]
         self.port = int(cfg["smtp_port"])
         self.user = cfg["user"]
         self.sender = cfg.get("from", cfg["user"])
-        self.to = cfg["to"] if isinstance(cfg["to"], list) else [cfg["to"]]
-        self.enabled = enabled
         env_name = cfg.get("password_env", "ZERODHA_SMTP_PASSWORD")
         self.password = os.environ.get(env_name)
         if enabled and not self.password:
@@ -172,18 +201,92 @@ class Emailer:
         log.info("ALERT %s :: %s", subject, body.replace("\n", " | "))
         if not self.enabled:
             return
+        if self.transport == "http":
+            self._send_http(line, body)
+            return
+        self._send_smtp(line, body)
+
+    def _send_http(self, line: str, body: str) -> None:
+        """POST the mail to SendGrid. A dead mail path must not kill the run."""
+        payload = json.dumps({
+            "personalizations": [{"to": [{"email": addr} for addr in self.to]}],
+            "from": {"email": self.sender},
+            "subject": line,
+            "content": [{"type": "text/plain", "value": body}],
+        }).encode()
+        req = urllib.request.Request(
+            self.api_url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+                # SendGrid answers 202 and nothing else, so without this line a
+                # send that never reaches an inbox is indistinguishable from one
+                # that was never attempted.
+                log.info("mail accepted: HTTP %s id=%s", resp.status,
+                         resp.headers.get("X-Message-Id", "?"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read()[:500].decode("utf-8", "replace")
+            log.error("email failed (%s): HTTP %s %s", line, exc.code, detail)
+        except Exception as exc:  # noqa: BLE001 - see _send_smtp
+            log.error("email failed (%s): %s", line, exc)
+
+    def _send_smtp(self, line: str, body: str) -> None:
         msg = EmailMessage()
         msg["Subject"] = line
         msg["From"] = self.sender
         msg["To"] = ", ".join(self.to)
         msg.set_content(body)
         try:
-            with smtplib.SMTP(self.host, self.port, timeout=30) as smtp:
+            with self._connect() as smtp:
                 smtp.starttls()
                 smtp.login(self.user, self.password)
                 smtp.send_message(msg)
+        except OSError as exc:
+            hint = ""
+            if getattr(exc, "errno", None) in (errno.ENETUNREACH, errno.EHOSTUNREACH,
+                                               errno.ECONNREFUSED, errno.ETIMEDOUT):
+                hint = (f" - the TCP connection to {self.host}:{self.port} never "
+                        "opened. Gmail and the password are not involved yet; "
+                        "the host is refusing or has no route for outbound SMTP. "
+                        "Many PaaS providers block ports 25/465/587, in which "
+                        "case mail has to go out over an HTTPS email API instead.")
+            log.error("email failed (%s): %s%s", line, exc, hint)
         except Exception as exc:  # noqa: BLE001 - a dead mail server must not kill the run
-            log.error("email failed (%s): %s", subject, exc)
+            log.error("email failed (%s): %s", line, exc)
+
+    def _connect(self) -> smtplib.SMTP:
+        """Open the SMTP connection, preferring IPv4.
+
+        A container can be handed an AAAA record for the mail host while having
+        no IPv6 route at all, and connect() then fails with ENETUNREACH before
+        anything reaches Gmail. Resolving the A records ourselves keeps it on
+        IPv4; _host is restored afterwards so STARTTLS still validates the
+        certificate against the real hostname rather than the literal IP.
+        """
+        try:
+            addrs = socket.getaddrinfo(self.host, self.port, socket.AF_INET,
+                                       socket.SOCK_STREAM)
+        except OSError:
+            addrs = []
+        last: Optional[OSError] = None
+        for _, _, _, _, sockaddr in addrs:
+            try:
+                smtp = smtplib.SMTP(sockaddr[0], self.port, timeout=30)
+            except OSError as exc:
+                last = exc
+                continue
+            smtp._host = self.host
+            return smtp
+        if last is not None:
+            raise last
+        return smtplib.SMTP(self.host, self.port, timeout=30)
 
 
 # --------------------------------------------------------------------------- #
@@ -1132,7 +1235,7 @@ def main() -> int:
     notify = Emailer(cfg["email"], enabled=not args.no_email and not args.replay)
 
     if args.test_email:
-        notify.send("test", "SMTP is working. No strategy was started.")
+        notify.send("test", "Mail is working. No strategy was started.")
         return 0
 
     if args.replay:

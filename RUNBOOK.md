@@ -43,14 +43,25 @@ cd /home/sahil/scripts/zerodha
 pip3 install -r requirements.txt
 ```
 
-### 3. Gmail app password
+### 3. SendGrid API key
 
-[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
-Requires 2FA on the account. If that page 404s, your Workspace admin has
-disabled app passwords — you'll need them to allow it, or switch the config to a
-different SMTP provider.
+The config ships with `"transport": "http"`, which sends alerts over the
+SendGrid HTTPS API instead of SMTP. Render blocks outbound ports 25, 465 and 587
+on free instances, so SMTP cannot leave the container there at all; port 443
+can.
 
-A normal account password will **not** work over SMTP.
+1. **Verify the sender.** SendGrid → Settings → Sender Authentication → Verify a
+   Single Sender, using the address in `"from"`. Click the confirmation link in
+   that inbox. Skipping this makes every send fail with HTTP 403.
+2. **Create the key.** Settings → API Keys → Create API Key → Restricted Access
+   → Mail Send: Full Access. The key is shown once — copy it then.
+3. The free SendGrid tier is a 60-day trial capped at 100 mails/day, after which
+   the account needs a paid plan or the alerts stop going out.
+
+Gmail SMTP still works locally: set `"transport": "smtp"` in `config.json` and
+export `ZERODHA_SMTP_PASSWORD` instead. That must be a **Google app password**
+from [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+(requires 2FA); a normal account password will **not** work over SMTP.
 
 ### 4. Environment variables
 
@@ -59,8 +70,11 @@ Put these in your shell profile so they survive a new terminal:
 ```bash
 export KITE_API_KEY=xxxxx
 export KITE_API_SECRET=xxxxx
-export ZERODHA_SMTP_PASSWORD=xxxx_xxxx_xxxx_xxxx
+export ZERODHA_SENDGRID_KEY=SG.xxxxxxxx
 ```
+
+On Render these go in the service's Environment tab, not in a shell profile.
+Never commit the key to the repo.
 
 ### 5. Verify email before you need it
 
@@ -71,8 +85,9 @@ cp config.example.json config.json
 python3 strategy.py --test-email
 ```
 
-A message titled `[BNF] test` should arrive. Sort this out well before a
-trading morning — SMTP problems are the most common first-run failure.
+A message titled `[BNF] test` should arrive. A successful SendGrid send is
+silent — the API returns 202 and the command exits. Sort this out well before a
+trading morning; mail is the most common first-run failure.
 
 ### 6. Log directory
 
@@ -199,8 +214,12 @@ breakout email instead.
 | `No token at .kite_token.json` | Never logged in | `python3 login.py` |
 | `Cached token is from 2026-08-28, not 2026-08-31` | Token expired overnight | `python3 login.py` again |
 | `config.json is dated ... but today is ...` | Stale box | Update `date`, or `--ignore-date` |
-| `SMTP password not found` | Env var missing in this shell | `export ZERODHA_SMTP_PASSWORD=...` |
+| `SendGrid API key not found` | Env var missing in this shell or in the Render service | `export ZERODHA_SENDGRID_KEY=...` |
+| `email failed: HTTP 401` | Key wrong, revoked, or missing the Mail Send scope | Create a new restricted key with Mail Send: Full Access |
+| `email failed: HTTP 403` | Sender address not verified in SendGrid | Settings → Sender Authentication → verify the `"from"` address |
+| `SMTP password not found` | On `"transport": "smtp"`, env var missing in this shell | `export ZERODHA_SMTP_PASSWORD=...` |
 | `email failed: ... Username and Password not accepted` | Using account password, not an app password | Generate an app password |
+| `email failed: ... the TCP connection ... never opened` | SMTP blocked by the host (Render free blocks 25/465/587) | Switch to `"transport": "http"` |
 | `Kite did not recognise NSE:NIFTY BANK` | Symbol typo in config | Restore `"index_symbol": "NSE:NIFTY BANK"` |
 | `No live BANKNIFTY future found` | Instrument dump fetch failed or name wrong | Check connectivity; `"fut_name": "BANKNIFTY"` |
 | Bars print but `V=0` and `vwap=n/a` | Futures ticks not arriving | Check the subscribe line named a FUT token; check the websocket didn't drop |

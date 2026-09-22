@@ -249,7 +249,23 @@ PAGE = """<!doctype html>
   <pre>{{ strategy_log }}</pre>
 </div>
 </div>
-{% if autoreload %}<script>setTimeout(() => location.reload(), 20000);</script>{% endif %}
+{% if autoreload %}<script>
+// The page refreshes itself so the log and status stay current, but a refresh
+// throws away whatever is half-typed in the arm form and repaints it from
+// config.json. Touching the form parks the timer until the form is submitted.
+(function () {
+  var form = document.querySelector('form[action="/arm"]');
+  var editing = false;
+  if (form) {
+    form.addEventListener('input', function () { editing = true; });
+    form.addEventListener('change', function () { editing = true; });
+  }
+  setInterval(function () {
+    var focused = form && form.contains(document.activeElement);
+    if (!editing && !focused) location.reload();
+  }, 20000);
+})();
+</script>{% endif %}
 """
 
 

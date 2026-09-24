@@ -30,7 +30,7 @@ BASE_CFG = {
     "index_symbol": "NSE:NIFTY BANK", "fut_name": "BANKNIFTY",
     "email": {"smtp_host": "x", "smtp_port": 587, "user": "u",
               "password_env": "Z", "from": "u", "to": ["u"]},
-    "ui": {"port": 5000, "arm_cutoff": "22:00", "launch_at": "09:00",
+    "ui": {"port": 5000, "form_open": "07:00", "form_close": "15:45", "launch_at": "09:00",
            "wait_for_token_until": "14:45"},
 }
 
@@ -62,15 +62,34 @@ def at(d: date, hh: int, mm: int) -> datetime:
 
 
 # --------------------------------------------------------------------------- #
-print("\n=== the form window closes at the cutoff ===")
+print("\n=== the form is open 07:00-15:45 on weekdays ===")
 reset()
 cfg = S.load_config()
-check("21:59 open", S.arm_window_open(cfg, at(THU, 21, 59))[0], True)
-check("22:00 open", S.arm_window_open(cfg, at(THU, 22, 0))[0], True)
-check("22:01 closed", S.arm_window_open(cfg, at(THU, 22, 1))[0], False)
-cfg2 = S.load_config(); cfg2["ui"]["arm_cutoff"] = "20:30"; S.save_config(cfg2)
-check("cutoff is editable", S.arm_window_open(S.load_config(), at(THU, 21, 0))[0],
+check("06:59 closed", S.arm_window_open(cfg, at(THU, 6, 59))[0], False)
+check("07:00 open", S.arm_window_open(cfg, at(THU, 7, 0))[0], True)
+check("10:45 open", S.arm_window_open(cfg, at(THU, 10, 45))[0], True)
+check("15:45 open", S.arm_window_open(cfg, at(THU, 15, 45))[0], True)
+check("15:46 closed", S.arm_window_open(cfg, at(THU, 15, 46))[0], False)
+check("21:00 closed", S.arm_window_open(cfg, at(THU, 21, 0))[0], False)
+check("saturday closed", S.arm_window_open(cfg, at(SAT, 10, 0))[0], False)
+cfg2 = S.load_config(); cfg2["ui"]["form_close"] = "12:00"; S.save_config(cfg2)
+check("close is editable", S.arm_window_open(S.load_config(), at(THU, 13, 0))[0],
       False)
+
+print("\n=== Submit & arm needs a login first ===")
+reset()
+cfg = S.load_config()
+check("no token -> login error", S.arm_blocker(cfg, at(THU, 10, 45)),
+      "Log in to Kite first, then Submit & arm.")
+reset(token_date="2026-09-16")
+check("yesterday's token -> login error", S.arm_blocker(cfg, at(THU, 10, 45)),
+      "Log in to Kite first, then Submit & arm.")
+reset(token_date=S.now().date().isoformat())
+check("today's token, window open -> allowed",
+      S.arm_blocker(cfg, S.now().replace(hour=10, minute=45)) if
+      S.now().weekday() < 5 else None, None)
+check("window closed beats login", S.arm_blocker(cfg, at(THU, 20, 0)).startswith(
+      "Cannot arm: the form is open"), True)
 
 # --------------------------------------------------------------------------- #
 print("\n=== form validation ===")
@@ -78,15 +97,17 @@ reset()
 cfg = S.load_config()
 good = {"date": "2026-09-17", "side": "buy", "box_low": "56000",
         "box_high": "56300", "violent_range": "180"}
-clean, errs = S.validate_form(cfg, good, at(date(2026, 9, 16), 21, 0))
+clean, errs = S.validate_form(cfg, good, at(THU, 10, 0))
 check("valid form accepted", errs, [])
 check("side upper-cased", clean["side"], "BUY")
 check("numbers parsed", clean["box_low"], 56000.0)
 
-_, errs = S.validate_form(cfg, {**good, "date": "2026-09-19"}, at(THU, 21, 0))
+_, errs = S.validate_form(cfg, {**good, "date": "2026-09-19"}, at(SAT, 10, 0))
 check("saturday rejected", any("Saturday" in e for e in errs), True)
 _, errs = S.validate_form(cfg, {**good, "date": "2026-09-10"}, at(THU, 21, 0))
-check("past date rejected", any("past" in e for e in errs), True)
+check("past date rejected", any("must be today" in e for e in errs), True)
+_, errs = S.validate_form(cfg, {**good, "date": "2026-09-18"}, at(THU, 10, 0))
+check("tomorrow rejected", any("must be today" in e for e in errs), True)
 _, errs = S.validate_form(cfg, {**good, "box_low": "57000"}, at(THU, 21, 0))
 check("inverted box rejected", any("below box_high" in e for e in errs), True)
 _, errs = S.validate_form(cfg, {**good, "side": "LONG"}, at(THU, 21, 0))
@@ -99,7 +120,7 @@ check("non-numeric rejected", any("must be a number" in e for e in errs), True)
 # --------------------------------------------------------------------------- #
 print("\n=== arming writes config and state ===")
 reset()
-clean, _ = S.validate_form(S.load_config(), good, at(date(2026, 9, 16), 21, 0))
+clean, _ = S.validate_form(S.load_config(), good, at(THU, 10, 0))
 S.arm(S.load_config(), clean)
 saved = json.loads(S.CONFIG.read_text())
 check("config date written", saved["date"], "2026-09-17")

@@ -2,11 +2,12 @@
 
 Kept separate from webui.py so the rules are testable without a browser.
 
-The day is armed by submitting the form before the cutoff (22:00 by default).
-Arming alone does not start anything: at launch time the scheduler also needs a
-Kite access token that is valid *today*. Kite flushes every token between 07:30
-and 08:30, so last night's token is always dead by morning - the login has to
-happen after ~07:35, which is why the UI has a separate one-click login.
+The form is open on the trading day itself, 07:00-15:45 by default, and only
+arms *today*. The Kite login has to come first: Kite flushes every token between
+07:30 and 08:30, so the login happens that morning, and Submit & arm is refused
+until a token valid for today exists. Once armed, the scheduler launches
+strategy.py from 09:00 (immediately, if it is already later) and the strategy
+backfills the session from 09:15.
 """
 
 from __future__ import annotations
@@ -48,7 +49,8 @@ PYTHON = _python()
 
 DEFAULT_UI = {
     "port": 5000,
-    "arm_cutoff": "22:00",        # form closes at this time
+    "form_open": "07:00",         # form opens on the trading day
+    "form_close": "15:45",        # and closes at this time
     "launch_at": "09:00",         # when strategy.py starts
     "wait_for_token_until": "14:45",  # keep waiting for a login until this
 }
@@ -130,11 +132,23 @@ def token_status() -> dict:
 
 def arm_window_open(cfg: dict, at: Optional[datetime] = None) -> tuple[bool, str]:
     at = at or now()
-    cutoff = parse_hhmm(cfg["ui"]["arm_cutoff"])
-    if at.time() > cutoff:
-        return False, (f"the form closes at {cfg['ui']['arm_cutoff']}; "
+    opens, closes = cfg["ui"]["form_open"], cfg["ui"]["form_close"]
+    if at.weekday() >= 5:
+        return False, f"it is {at:%A} - the market is shut"
+    if not parse_hhmm(opens) <= at.time() <= parse_hhmm(closes):
+        return False, (f"the form is open {opens}-{closes}; "
                        f"it is {at:%H:%M}")
     return True, ""
+
+
+def arm_blocker(cfg: dict, at: Optional[datetime] = None) -> Optional[str]:
+    """Why Submit & arm is refused right now, or None if it may go ahead."""
+    ok, why = arm_window_open(cfg, at)
+    if not ok:
+        return f"Cannot arm: {why}."
+    if not token_status()["ok"]:
+        return "Log in to Kite first, then Submit & arm."
+    return None
 
 
 def validate_form(cfg: dict, form: dict, at: Optional[datetime] = None) -> tuple[Optional[dict], list]:
@@ -146,8 +160,8 @@ def validate_form(cfg: dict, form: dict, at: Optional[datetime] = None) -> tuple
     raw_date = (form.get("date") or "").strip()
     try:
         d = date.fromisoformat(raw_date)
-        if d < at.date():
-            errors.append(f"{d} is in the past")
+        if d != at.date():
+            errors.append(f"date must be today ({at.date()}), not {d}")
         elif d.weekday() >= 5:
             errors.append(f"{d:%Y-%m-%d} is a {d:%A} - the market is shut")
         else:

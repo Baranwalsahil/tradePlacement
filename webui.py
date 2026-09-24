@@ -4,15 +4,16 @@
     ./venv/bin/python webui.py          then open http://127.0.0.1:5000
 
 What it does:
-  * evening - fill the form (date, side, box_low, box_high, violent_range) and
-    submit before the cutoff. That writes config.json and ARMS the day.
-  * morning - one click logs you into Kite. The callback is caught here and
-    today's access token is minted. Kite flushes tokens between 07:30 and 08:30,
-    so this cannot be done the night before.
-  * 09:00   - the scheduler launches strategy.py, but only if the day is armed
-    AND a token valid for today exists. If you have not logged in yet it keeps
-    waiting and starts the moment you do (the strategy backfills from 09:15, so
-    a late start still reconstructs the whole session).
+  * 07:00-15:45 on the trading day - the form is open.
+    1. Log in to Kite. The callback is caught here and today's access token is
+       minted. Kite flushes tokens between 07:30 and 08:30, so log in after
+       07:35.
+    2. Fill the form (side, box_low, box_high, violent_range) and Submit & arm.
+       That writes config.json and ARMS today. Without a login it is refused.
+  * 09:00   - the scheduler launches strategy.py if today is armed and the token
+    is valid. Armed later than that, it launches within ~20s of arming - the
+    strategy backfills from 09:15, so a late start still reconstructs the whole
+    session. It gives up at wait_for_token_until (14:45).
   * STOP    - disarms the day, kills a running strategy, and emails a record.
 
 Binds to 127.0.0.1 only. It can trigger a Kite login and controls whether live
@@ -163,7 +164,7 @@ PAGE = """<!doctype html>
      {% else %}<span class="pill idle">not running</span>{% endif %}</td></tr>
    <tr><td>Scheduler</td><td>{{ launch_reason }}</td></tr>
    <tr><td>Form window</td><td>
-     {% if window_open %}open until {{ cfg.ui.arm_cutoff }}
+     {% if window_open %}open until {{ cfg.ui.form_close }}
      {% else %}<span class="pill warn">closed</span> {{ window_why }}{% endif %}</td></tr>
   </table>
 </div>
@@ -171,8 +172,8 @@ PAGE = """<!doctype html>
 <div class="card">
   <form method="post" action="/arm">
     <div class="row">
-      <div><label>Date</label><input name="date" value="{{ form.date }}"
-           placeholder="YYYY-MM-DD"></div>
+      <div><label>Date (always today)</label><input name="date"
+           value="{{ form.date }}" readonly></div>
       <div><label>Side</label><select name="side">
         <option {{ 'selected' if form.side=='BUY' else '' }}>BUY</option>
         <option {{ 'selected' if form.side=='SELL' else '' }}>SELL</option>
@@ -187,6 +188,8 @@ PAGE = """<!doctype html>
     <p style="margin:16px 0 0">
       <button class="primary" type="submit" {{ '' if window_open else 'disabled' }}>
         Submit &amp; arm</button>
+      {% if window_open and not tok.ok %}<span class="muted">&nbsp;log in to Kite
+        first</span>{% endif %}
     </p>
     {% for e in errors %}<p class="err">{{ e }}</p>{% endfor %}
     {% if message %}<p class="msg">{{ message }}</p>{% endif %}
@@ -212,7 +215,7 @@ PAGE = """<!doctype html>
   </div>
   <p class="muted" style="margin-top:12px">
     Kite clears every access token between 07:30 and 08:30, so last night's login
-    is always dead by morning. Log in after 07:35 on the day you want to trade.
+    is always dead by morning. Log in after 07:35, then Submit &amp; arm.
   </p>
   <details style="margin-top:10px"><summary class="muted">Paste a request_token
     manually</summary>
@@ -277,7 +280,8 @@ def render(message: str = "", errors: Optional[list] = None,
     win_ok, win_why = S.arm_window_open(cfg)
     _, reason = S.should_launch(cfg)
     defaults = {
-        "date": cfg.get("date") or S.next_trading_day().isoformat(),
+        # The form only ever arms today; never prefill a stale config date.
+        "date": today.isoformat(),
         "side": cfg.get("side", "BUY"),
         "box_low": cfg.get("box_low", ""),
         "box_high": cfg.get("box_high", ""),
@@ -362,9 +366,9 @@ def index():
 @app.post("/arm")
 def arm():
     cfg = S.load_config()
-    ok, why = S.arm_window_open(cfg)
-    if not ok:
-        return render(errors=[f"Cannot arm: {why}."], form=request.form.to_dict())
+    blocker = S.arm_blocker(cfg)
+    if blocker:
+        return render(errors=[blocker], form=request.form.to_dict())
     clean, errors = S.validate_form(cfg, request.form.to_dict())
     if errors:
         return render(errors=errors, form=request.form.to_dict())
@@ -372,8 +376,10 @@ def arm():
     note(f"armed {clean['date']} {clean['side']} "
          f"box {clean['box_low']}-{clean['box_high']} "
          f"violent>{clean['violent_range']}")
-    return home(f"Armed for {clean['date']}. "
-                f"Log in to Kite after 07:35 that morning.")
+    go, reason = S.should_launch(S.load_config())
+    return home(f"Armed for {clean['date']}. " + (
+        "strategy.py launches within ~20s and backfills from 09:15."
+        if go else f"Scheduler: {reason}."))
 
 
 @app.post("/stop")

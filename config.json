@@ -25,8 +25,9 @@
   },
   "ui": {
     "port": 5000,
-    "arm_cutoff": "22:00",
+    "form_open": "07:00",
+    "form_close": "15:45",
     "launch_at": "09:00",
-    "wait_for_token_until": "14:45"
+    "wait_for_token_until": "15:45"
   }
 }

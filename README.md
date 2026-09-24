@@ -59,14 +59,16 @@ Then:
 
 | When | Do |
 |---|---|
-| Evening, before 22:00 | Fill the form — date, side, box_low, box_high, violent_range — and **Submit & arm**. This writes `config.json` and arms that date. |
-| Morning, after 07:35 | Click **Log in to Kite**. Kite flushes every access token between 07:30 and 08:30, so last night's login is always dead by morning — this step cannot be done in advance. |
-| 09:00 | The scheduler launches `strategy.py` by itself, but only if the day is armed *and* a token valid for today exists. |
+| Trading day, 07:35–15:45 | 1. Click **Log in to Kite**. Kite flushes every access token between 07:30 and 08:30, so this cannot be done the night before. |
+| | 2. Fill the form — side, box_low, box_high, violent_range — and **Submit & arm**. The date is always today. This writes `config.json` and arms today. Without a login it is refused with a red error. |
+| 09:00 | The scheduler launches `strategy.py` by itself if today is armed and the token is valid. Armed later, it launches within ~20s of arming. |
 | Any time | **Stop** disarms the day, kills a running strategy, and emails a record. |
 
-If you have not logged in by 09:00 the scheduler keeps waiting and starts the
-moment you do — the strategy backfills from 09:15, so a late start still
-reconstructs the whole session. It gives up at `wait_for_token_until` (14:45).
+The form is open `form_open`–`form_close` (07:00–15:45) on weekdays only. A late
+start is fine — the strategy backfills from 09:15, so it still reconstructs the
+whole session. The scheduler gives up at `wait_for_token_until` (14:45, the same
+as `no_new_entry_after`), so arming after that records the box but launches
+nothing.
 
 **One-off setup:** in the Kite developer console set the app's Redirect URL to
 exactly `http://127.0.0.1:5000/callback`, so the panel can catch the
@@ -79,7 +81,8 @@ Timings live in `config.json` under `ui`:
 ```json
 "ui": {
   "port": 5000,
-  "arm_cutoff": "22:00",
+  "form_open": "07:00",
+  "form_close": "15:45",
   "launch_at": "09:00",
   "wait_for_token_until": "14:45"
 }

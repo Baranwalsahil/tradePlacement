@@ -491,7 +491,13 @@ def exchange(request_token: str) -> tuple[bool, str]:
     }, indent=2))
     S.TOKEN.chmod(stat.S_IRUSR | stat.S_IWUSR)
     note(f"token minted for {sess.get('user_id')}")
-    return True, f"Logged in as {sess.get('user_id')}. Token valid for today."
+    killed = S.reset_run_after_login()
+    if killed:
+        note(f"killed running strategy pid {killed}; scheduler will relaunch "
+             "it on the new token")
+    return True, (f"Logged in as {sess.get('user_id')}. Token valid for today."
+                  + (f" Restarting the running strategy (was pid {killed})."
+                     if killed else ""))
 
 
 @app.get("/status")

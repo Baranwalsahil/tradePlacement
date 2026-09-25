@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import sys
+import time as _time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -224,10 +225,28 @@ def running_pid(st: Optional[dict] = None) -> Optional[int]:
     pid = run.get("pid")
     if not pid:
         return None
+    # launch() Popens strategy.py and never waits on it, so a finished or
+    # killed run stays a zombie of this process. kill(pid, 0) succeeds on a
+    # zombie, which on 2026-09-25 made yesterday's stopped pid block today's
+    # launch. Reap it first; ChildProcessError means it is not our child.
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            return None
+    except ChildProcessError:
+        pass
+    except OSError:
+        return None
     try:
         os.kill(pid, 0)
     except OSError:
         return None
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            if f.read().rsplit(")", 1)[1].split()[0] == "Z":
+                return None
+    except (OSError, IndexError):
+        pass
     return pid
 
 
@@ -249,7 +268,8 @@ def launch(cfg: dict) -> dict:
     return st["run"]
 
 
-def kill_running() -> Optional[int]:
+def kill_running(grace: float = 5.0) -> Optional[int]:
+    """SIGTERM the running strategy, SIGKILL it after `grace` seconds, reap it."""
     pid = running_pid()
     if pid is None:
         return None
@@ -260,7 +280,33 @@ def kill_running() -> Optional[int]:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             return None
+    deadline = _time.monotonic() + grace
+    while running_pid() == pid and _time.monotonic() < deadline:
+        _time.sleep(0.1)
+    if running_pid() == pid:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except OSError:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        _time.sleep(0.2)
+        running_pid()   # reap
     return pid
+
+
+def reset_run_after_login() -> Optional[int]:
+    """A fresh login means a fresh run: kill any strategy still going and drop
+    the run record, so should_launch() no longer answers "already launched
+    today" and the scheduler starts strategy.py again on the new token.
+    strategy.py backfills from 09:15, so a mid-session restart rebuilds VWAP.
+    """
+    killed = kill_running()
+    st = load_state()
+    if st.pop("run", None) is not None:
+        save_state(st)
+    return killed
 
 
 def should_launch(cfg: dict, at: Optional[datetime] = None) -> tuple[bool, str]:

@@ -16,9 +16,9 @@
     "api_key_env": "ZERODHA_SENDGRID_KEY",
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
-    "user": "yashkashyap393@gmail.com",
+    "user": "kingsleysecurities@gmail.com",
     "password_env": "ZERODHA_SMTP_PASSWORD",
-    "from": "yashkashyap393@gmail.com",
+    "from": "kingsleysecurities@gmail.com",
     "to": [
       "yashkashyap393@gmail.com"
     ]

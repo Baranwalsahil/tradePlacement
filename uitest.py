@@ -195,6 +195,17 @@ S.arm(S.load_config(), {"date": "2026-09-17", "side": "SELL",
                         "box_low": 1.0, "box_high": 2.0, "violent_range": 180.0})
 check("re-armed", S.is_armed_for(THU), True)
 
+print("\n=== re-arming after a stopped run launches again ===")
+stopped_ran = {**armed, "stopped_date": today.isoformat(),
+               "run": {"date": today.isoformat(), "pid": 999999,
+                       "started_at": "x", "log": "x"}}
+reset(state=stopped_ran, token_date=today.isoformat())
+S.arm(S.load_config(), {"date": today.isoformat(), "side": "SELL",
+                        "box_low": 1.0, "box_high": 2.0, "violent_range": 180.0})
+check("run record dropped", S.load_state().get("run"), None)
+check("re-armed -> launches",
+      S.should_launch(S.load_config(), at(today, 10, 0))[0], True)
+
 print("\n=== next_trading_day skips the weekend ===")
 check("Friday -> Monday",
       S.next_trading_day(date(2026, 9, 18)).isoformat(), "2026-09-21")

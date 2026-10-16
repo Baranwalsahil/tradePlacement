@@ -194,7 +194,15 @@ def validate_form(cfg: dict, form: dict, at: Optional[datetime] = None) -> tuple
 
 
 def arm(cfg: dict, clean: dict) -> dict:
-    """Write the config and record the arming. Caller has already validated."""
+    """Write the config and record the arming. Caller has already validated.
+
+    Arming is also a fresh run, like a login: kill any strategy still going and
+    drop today's run record. Otherwise a Stop followed by a re-arm leaves
+    run.date == today and should_launch() answers "already launched today"
+    forever - on 2026-10-16 that left nothing running after 10:39. It also means
+    a changed box actually reaches strategy.py, which reads config.json once.
+    """
+    reset_run_after_login()
     cfg = dict(cfg)
     cfg.update({k: clean[k] for k in
                 ("date", "side", "box_low", "box_high", "violent_range")})
